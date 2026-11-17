@@ -3,8 +3,18 @@
 Bootstrap 区间估计的真实业务分析小型项目。完整模拟客户、痛点、上下游、算法公式与一天工作剧本见 [BUSINESS.md](BUSINESS.md)。
 
 ## 模块与业务流程
-数据接入（JSON/CSV、字段验证、批次指纹）→ 参数化分析（异步 Python worker）→ 结果复核（指标、图形、明细、解释、批准）→ 定时分发（本地收件箱、CSV/JSON、SHA256）；另有业务总览和审计轨迹。
-三个贯穿全栈的实体：Dataset 数据批次、Job 分析任务、Report 分发计划；辅助 User、Audit、Delivery。
+预约调度（两类设备成组占用、清洗与稳定计入占用、停用改期、读数接报、封卷建批）→ 数据接入（JSON/CSV、字段验证、批次指纹）→ 参数化分析（异步 Python worker）→ 结果复核（指标、图形、明细、解释、批准）→ 定时分发（本地收件箱、CSV/JSON、SHA256）；另有业务总览和审计轨迹。
+贯穿全栈的实体：Equipment 设备、Booking 校准预约单、Downtime 设备停用、Reading 预约读数、AnalysisBatch 分析批次、Dataset 数据批次、Job 分析任务、Report 分发计划；辅助 User、Audit、Delivery。
+
+### 校准预约调度
+- 实验室共用恒温槽（bath）与标准仪（standard），每单**成组占用**两类设备，杜绝分别预约把同一时段排给两批。
+- 清洗与稳定时间计入占用：占用区间 = 测量窗口向前顺延清洗+稳定分钟数。
+- 预约与既有预约/停用冲突时拒单并返回具体原因（设备、时段、冲突对象）。
+- 设备停用撞上未开工预约时整组改期（保持时长与缓冲，14 天内搜索共同空档）；无共同空档转为待重排，可手动重排；已开工的预约留到结束。
+- 并发安全：预约、改期、停用按设备行锁（按 id 升序）串行；开工/封卷/接报按预约单行锁互斥；事务中断回滚恢复原单。
+- 幂等：预约与停用携带 request_key，重试返回原单不新增占用；唯一约束兜底并发同键落库。
+- 读数绑定预约：未开工或设备不符拒收；封卷后晚到读数不改旧卷；封卷与接报并发按先落定者裁决。
+- 封卷生成唯一分析批次（batch_no 含预约号，booking_id 唯一约束），同时落成可分析的数据批次；建批中断恢复后重试不重复建批。
 
 ## 快速启动
 ```bash
@@ -29,7 +39,7 @@ Python 3.12 / FastAPI / SQLAlchemy / NumPy / SciPy / scikit-learn；PostgreSQL 1
 ## 目录与工程约定
 backend/src/{models,schemas,services,routes,controllers,middlewares,constants,config,utils}；backend/scripts/seed_demo.py；backend/migrations/initial.py。
 frontend/src/{api,stores,types,components/common,hooks,pages,router,utils,constants}。
-Role 枚举：admin/analyst/viewer；JobStatus：queued/running/completed/failed。后端 backend/src/constants/enums.py，前端 frontend/src/constants/enums.js；路由权限在 middlewares/auth.py；页面按相同角色控制操作入口。
+Role 枚举：admin/analyst/viewer；JobStatus：queued/running/completed/failed；BookingStatus：booked/in_progress/sealed/pending_reschedule；EquipmentKind：bath/standard。后端 backend/src/constants/enums.py，前端 frontend/src/constants/enums.js；路由权限在 middlewares/auth.py；页面按相同角色控制操作入口。
 
 ## 环境变量与 Docker
 COMPOSE_PROJECT_NAME=sensor-bootstrap；FRONTEND_PORT=18206；BACKEND_PORT=19206；DB_PORT=17706；DB_PASSWORD、JWT_SECRET 见 .env.example；SEED_DEMO 默认 true。共享命名产物卷供后端下载与 worker 写入，数据库/Redis 各持久卷。
